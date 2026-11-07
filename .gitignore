@@ -2,4 +2,5 @@
 /*/
 /dist/
 !/.github/
+!/overrides/
 __pycache__/

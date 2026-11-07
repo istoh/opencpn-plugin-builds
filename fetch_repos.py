@@ -29,11 +29,11 @@ if [[ ! -f CMakeLists.txt ]]; then
 fi
 build_dir=${OPENCPN_BUILD_DIR:-build-native}
 cmake -S . -B "$build_dir" -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build "$build_dir" --parallel "${OPENCPN_BUILD_JOBS:-2}"
+cmake --build "$build_dir" --config Release --parallel "${OPENCPN_BUILD_JOBS:-2}"
 if [[ ${OPENCPN_BUILD_TARBALL:-1} == 1 ]]; then
     targets=$(cmake --build "$build_dir" --target help)
     if grep -Eq '(^[.[:space:]]*tarball([[:space:]]|:|$))' <<< "$targets"; then
-        cmake --build "$build_dir" --target tarball
+        cmake --build "$build_dir" --config Release --target tarball
     else
         printf 'No tarball target. Compiled outputs are in %s.\\n' "$build_dir"
     fi

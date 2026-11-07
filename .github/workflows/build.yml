@@ -7,6 +7,10 @@ on:
         description: 'Plugin name filter. Leave empty to build the entire catalog.'
         required: false
         default: DashboardSK
+      target:
+        description: Build target from targets.json
+        required: true
+        default: ubuntu-26.04-x64
 
 permissions:
   contents: read
@@ -16,6 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      profile: ${{ steps.plan.outputs.profile }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,6 +28,7 @@ jobs:
       - id: plan
         env:
           PLUGIN_FILTER: ${{ inputs.plugin }}
+          BUILD_TARGET: ${{ inputs.target }}
         run: |
           args=(--matrix)
           if [[ -n "$PLUGIN_FILTER" ]]; then
@@ -30,10 +36,15 @@ jobs:
           fi
           matrix=$(./fetch.sh "${args[@]}")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          profile=$(python3 build-target.py show "$BUILD_TARGET")
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
 
   build:
     needs: catalog
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.catalog.outputs.profile).runner }}
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -43,18 +54,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Enable ARM emulation
+        if: fromJSON(needs.catalog.outputs.profile).qemu == true
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
       - name: Fetch and build
         env:
           PLUGIN_REPO: ${{ matrix.repo }}
           PLUGIN_SOURCE: ${{ matrix.url }}
+          BUILD_TARGET: ${{ inputs.target }}
         run: |
-          ./fetch.sh --repo "$PLUGIN_REPO"
+          python fetch_repos.py --repo "$PLUGIN_REPO"
           test "$(git -C "$PLUGIN_REPO" remote get-url origin)" = "$PLUGIN_SOURCE"
-          ./container-build.sh "$PLUGIN_REPO"
+          python build-target.py build "$BUILD_TARGET" "$PLUGIN_REPO"
       - name: Save package and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ubuntu-26.04-${{ matrix.repo }}
+          name: ${{ inputs.target }}-${{ matrix.repo }}
           path: dist/
           if-no-files-found: ignore

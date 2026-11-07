@@ -1,4 +1,5 @@
-FROM ubuntu:26.04
+ARG BASE_IMAGE=ubuntu:26.04
+FROM ${BASE_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates cmake curl gettext git libarchive-dev \
