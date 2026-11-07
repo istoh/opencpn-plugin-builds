@@ -1,6 +1,8 @@
-# Repositories fetched by fetch.sh are separate checkouts at the root.
-/*/
+# Plugin source checkouts made by fetch.sh
+/repos/
+# Build outputs and logs
 /dist/
-!/.github/
-!/overrides/
 __pycache__/
+# Local IDE settings and build logs
+/.idea/
+/*.log

@@ -1,77 +1,170 @@
 name: Build OpenCPN plugins
 
+# Nightly: check every plugin's upstream commit, build only what changed
+# (source, recipe or build environment), scan it and publish a release.
 on:
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
     inputs:
       plugin:
-        description: 'Plugin name filter. Leave empty to build the entire catalog.'
+        description: 'Filter on plugins/ directory names. Empty means all.'
         required: false
-        default: DashboardSK
-      target:
-        description: Build target from targets.json
-        required: true
-        default: ubuntu-26.04-x64
+        default: ''
+      targets:
+        description: '"containers", "all" (adds the native Windows/macOS builds) or target names'
+        required: false
+        default: containers
+      force:
+        description: Rebuild even if nothing changed
+        type: boolean
+        default: false
+      retry_failed:
+        description: Retry builds that failed with the same inputs
+        type: boolean
+        default: false
+      analysis:
+        description: Run static analysis and vulnerability scans
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: plugin-builds
+  cancel-in-progress: false
+
 jobs:
-  catalog:
+  plan:
+    # While the repository is private, Actions minutes are limited and the arm64
+    # runners are not available, so only manually started runs build anything.
+    if: github.event_name != 'schedule' || !github.event.repository.private
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
-      profile: ${{ steps.plan.outputs.profile }}
+      count: ${{ steps.plan.outputs.count }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Download the build state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p state
+          gh release download current --repo "$GITHUB_REPOSITORY" -p manifest.json -D state \
+            || echo '{}' > state/manifest.json
       - id: plan
         env:
           PLUGIN_FILTER: ${{ inputs.plugin }}
-          BUILD_TARGET: ${{ inputs.target }}
+          TARGETS: ${{ inputs.targets || 'containers' }}
+          FORCE: ${{ inputs.force }}
+          RETRY: ${{ inputs.retry_failed }}
+          ANALYSIS: ${{ inputs.analysis }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
-          args=(--matrix)
-          if [[ -n "$PLUGIN_FILTER" ]]; then
-            args+=(--match "$PLUGIN_FILTER")
-          fi
-          matrix=$(./fetch.sh "${args[@]}")
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-          profile=$(python3 build-target.py show "$BUILD_TARGET")
-          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          args=(--targets "$TARGETS" --match "$PLUGIN_FILTER")
+          [[ $FORCE == true ]] && args+=(--force)
+          [[ $RETRY == true ]] && args+=(--retry-failed)
+          [[ $ANALYSIS == false ]] && args+=(--no-analysis)
+          [[ $PRIVATE == true ]] && args+=(--skip-runner ubuntu-24.04-arm)
+          python3 scripts/ci.py plan "${args[@]}"
 
   build:
-    needs: catalog
-    runs-on: ${{ fromJSON(needs.catalog.outputs.profile).runner }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         shell: bash
-    timeout-minutes: 45
+    timeout-minutes: 300
     strategy:
       fail-fast: false
-      max-parallel: 6
-      matrix: ${{ fromJSON(needs.catalog.outputs.matrix) }}
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Enable ARM emulation
-        if: fromJSON(needs.catalog.outputs.profile).qemu == true
+        if: matrix.qemu
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm
-      - name: Fetch and build
+      - name: Build ${{ matrix.targets }}
         env:
-          PLUGIN_REPO: ${{ matrix.repo }}
-          PLUGIN_SOURCE: ${{ matrix.url }}
-          BUILD_TARGET: ${{ inputs.target }}
+          PLUGIN: ${{ matrix.plugin }}
+          COMMIT: ${{ matrix.commit }}
+          SINCE: ${{ matrix.since }}
+          RUNNER: ${{ matrix.runner }}
+          TARGETS: ${{ matrix.targets }}
+          ANALYZE: ${{ matrix.analyze }}
         run: |
-          python fetch_repos.py --repo "$PLUGIN_REPO"
-          test "$(git -C "$PLUGIN_REPO" remote get-url origin)" = "$PLUGIN_SOURCE"
-          python build-target.py build "$BUILD_TARGET" "$PLUGIN_REPO"
-      - name: Save package and logs
+          args=(--plugin "$PLUGIN" --commit "$COMMIT" --since "$SINCE" --runner "$RUNNER")
+          [[ $ANALYZE == true ]] && args+=(--analyze)
+          read -ra targets <<< "$TARGETS"
+          python3 scripts/ci.py build "${args[@]}" "${targets[@]}"
+      - name: Save packages, logs and reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.target }}-${{ matrix.repo }}
-          path: dist/
+          name: build-${{ matrix.plugin }}-${{ matrix.runner }}
+          path: |
+            dist/
+            !dist/images/
           if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          path: dist
+          merge-multiple: true
+      - name: Download the build state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p state
+          gh release download current --repo "$GITHUB_REPOSITORY" -p manifest.json -D state \
+            || echo '{}' > state/manifest.json
+      - id: notes
+        run: |
+          python3 scripts/ci.py publish --results dist --manifest state/manifest.json --out out \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - name: Publish releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.notes.outputs.tag }}
+          BUILT: ${{ steps.notes.outputs.built }}
+        run: |
+          set -euo pipefail
+          mapfile -t packages < out/upload.txt
+          if (( BUILT > 0 )); then
+            extra=()
+            [[ -f out/analysis.tar.gz ]] && extra+=(out/analysis.tar.gz)
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Plugin builds $TAG" \
+              --notes-file out/notes.md --latest=false "${packages[@]}" "${extra[@]}"
+          fi
+          if ! gh release view current --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create current --repo "$GITHUB_REPOSITORY" --title "Current plugin builds" \
+              --notes-file out/current.md --latest
+          fi
+          while read -r asset; do
+            [[ -n $asset ]] && gh release delete-asset current "$asset" --repo "$GITHUB_REPOSITORY" -y || true
+          done < out/delete.txt
+          if (( ${#packages[@]} )); then
+            gh release upload current --repo "$GITHUB_REPOSITORY" --clobber "${packages[@]}"
+          fi
+          gh release upload current --repo "$GITHUB_REPOSITORY" --clobber out/manifest.json
+          gh release edit current --repo "$GITHUB_REPOSITORY" --notes-file out/current.md
