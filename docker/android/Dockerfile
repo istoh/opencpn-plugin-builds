@@ -19,5 +19,15 @@ RUN curl -fsSL --retry 3 -o /tmp/ndk.zip \
     && mv "/opt/android/android-ndk-${NDK_VERSION}" /opt/android/ndk \
     && rm /tmp/ndk.zip
 
+# Prebuilt wxWidgets and Qt for Android, used by every plugin template. Newer
+# templates expect master.zip with this SHA-256 in their download cache; older
+# ones take the extracted tree as OCPN_Android_Common.
+ARG ANDROID_COMMON_SHA256=b6359260ecfb44b96c0dd4052e41aac505c9e3c4eb7a798b29c17ddbc3c939b3
+RUN mkdir -p /opt/android/cache \
+    && curl -fsSL --retry 3 -o /opt/android/cache/master.zip \
+        https://github.com/bdbcat/OCPNAndroidCommon/archive/master.zip \
+    && echo "${ANDROID_COMMON_SHA256}  /opt/android/cache/master.zip" | sha256sum -c - \
+    && unzip -q /opt/android/cache/master.zip -d /opt/android/cache
+
 # The plugin toolchain files look for NDK_HOME, falling back to /opt/android/ndk.
 ENV NDK_HOME=/opt/android/ndk ANDROID_NDK_HOME=/opt/android/ndk HOME=/tmp

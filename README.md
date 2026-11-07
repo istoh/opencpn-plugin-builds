@@ -17,7 +17,7 @@ plugins/<name>/
     build.sh              on the host: builds this plugin in the containers;
                           inside a container: the build recipe
     Dockerfile            optional: extra dependencies on top of the base image
-    targets               optional: the only targets this plugin supports
+    targets               optional: limit the targets (names or globs, ! excludes)
 scripts/                  shared helpers (runner, git fetch, default CMake recipe)
 repos/<name>/             source checkouts (git-ignored)
 dist/<target>/<name>/     tarballs, logs and source revision (git-ignored)
@@ -92,6 +92,19 @@ original checkout is mounted read-only. These variables are available:
 The build only needs to leave an import tarball (a `*.tar.gz` that contains
 `metadata.xml`) somewhere in the tree. Each tarball is checked against the
 target's tuple.
+
+`scripts/cmake-plugin.sh` handles both the newer templates, which have a
+`tarball` target, and the older ones, which build a CPack package and get
+`metadata.xml` from their CI. For Android, it uses the plugin's toolchain
+file and the prebuilt `OCPNAndroidCommon` libraries in the Android image.
+
+To limit a plugin to some targets, list them in `plugins/<name>/targets`,
+one name or glob per line. A line starting with `!` excludes targets:
+
+```
+# No Android toolchain file upstream.
+!android-*
+```
 
 To add extra packages, create a `plugins/<name>/Dockerfile`:
 

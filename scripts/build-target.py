@@ -2,6 +2,7 @@
 """Build one plugin for one target and collect its tarball and logs."""
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -53,12 +54,20 @@ def plugins():
 
 
 def supports(plugin, target):
-    """A plugin may restrict its targets with a plugins/<name>/targets file."""
+    """A plugin may restrict its targets with a plugins/<name>/targets file.
+
+    Each line is a target name or a glob such as rpi-*. A line starting with ! excludes
+    the matching targets. With only exclusions, all other targets are kept.
+    """
     listing = ROOT / "plugins" / plugin / "targets"
     if not listing.is_file():
         return True
-    wanted = {line.split("#")[0].strip() for line in listing.read_text(encoding="utf-8").splitlines()}
-    return target in wanted
+    lines = [line.split("#")[0].strip() for line in listing.read_text(encoding="utf-8").splitlines()]
+    lines = [line for line in lines if line]
+    includes = [line for line in lines if not line.startswith("!")]
+    excludes = [line[1:].strip() for line in lines if line.startswith("!")]
+    included = not includes or any(fnmatch.fnmatchcase(target, pattern) for pattern in includes)
+    return included and not any(fnmatch.fnmatchcase(target, pattern) for pattern in excludes)
 
 
 def runnable(target):
