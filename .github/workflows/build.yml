@@ -118,7 +118,7 @@ jobs:
 
   publish:
     needs: [plan, build]
-    if: always() && needs.plan.result == 'success' && needs.plan.outputs.count != '0'
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.count != '0' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
