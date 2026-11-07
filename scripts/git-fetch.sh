@@ -16,9 +16,36 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 dest=$root/repos/$name
 export GIT_TERMINAL_PROMPT=0
 
+# REF @release means the newest release in the OpenCPN catalog, found by the
+# plugin names in OPENCPN_CATALOG_NAMES (separated by ;).
+IFS=';' read -ra catalog_names <<< "${OPENCPN_CATALOG_NAMES:-}"
+newest_release() {
+    (( ${#catalog_names[@]} )) && python3 "$root/scripts/catalog.py" release-ref "$url" "${catalog_names[@]}"
+}
+if [[ $ref == @release ]]; then
+    if release=$(newest_release); then
+        ref=${release%% *}
+        source_note=${release#* }
+    else
+        ref=
+        source_note="WARNING: ${release#* }, building the default branch"
+    fi
+elif [[ -n $ref ]]; then
+    source_note="pinned $ref"
+    if release=$(newest_release) && [[ ${release%% *} != "$ref" ]]; then
+        source_note="WARNING: pinned $ref, but the newest ${release#* }"
+    fi
+else
+    source_note="default branch"
+fi
+if [[ $source_note == WARNING:* ]]; then
+    printf '%s: %s\n' "$name" "$source_note" >&2
+fi
+
 if [[ ${OPENCPN_FETCH_RESOLVE:-0} == 1 ]]; then
+    # Print "<commit> <where it comes from>".
     if [[ $ref =~ ^[0-9a-f]{40}$ ]]; then
-        echo "$ref"
+        echo "$ref $source_note"
         exit 0
     fi
     pattern=${ref:-HEAD}
@@ -30,7 +57,7 @@ if [[ ${OPENCPN_FETCH_RESOLVE:-0} == 1 ]]; then
         printf '%s: %s not found in %s\n' "$name" "$pattern" "$url" >&2
         exit 1
     fi
-    echo "$commit"
+    echo "$commit $source_note"
     exit 0
 fi
 ref=${OPENCPN_FETCH_COMMIT:-$ref}

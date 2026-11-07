@@ -63,6 +63,7 @@ jobs:
           RETRY: ${{ inputs.retry_failed }}
           ANALYSIS: ${{ inputs.analysis }}
           PRIVATE: ${{ github.event.repository.private }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           args=(--targets "$TARGETS" --match "$PLUGIN_FILTER")
           [[ $FORCE == true ]] && args+=(--force)
@@ -70,6 +71,8 @@ jobs:
           [[ $ANALYSIS == false ]] && args+=(--no-analysis)
           [[ $PRIVATE == true ]] && args+=(--skip-runner ubuntu-24.04-arm)
           python3 scripts/ci.py plan "${args[@]}"
+          # Show what changed upstream since each plugin's last release.
+          { echo; python3 scripts/status.py --manifest state/manifest.json; } >> "$GITHUB_STEP_SUMMARY" || true
 
   build:
     needs: plan
@@ -97,11 +100,12 @@ jobs:
           PLUGIN: ${{ matrix.plugin }}
           COMMIT: ${{ matrix.commit }}
           SINCE: ${{ matrix.since }}
+          SOURCE: ${{ matrix.source }}
           RUNNER: ${{ matrix.runner }}
           TARGETS: ${{ matrix.targets }}
           ANALYZE: ${{ matrix.analyze }}
         run: |
-          args=(--plugin "$PLUGIN" --commit "$COMMIT" --since "$SINCE" --runner "$RUNNER")
+          args=(--plugin "$PLUGIN" --commit "$COMMIT" --since "$SINCE" --runner "$RUNNER" --source "$SOURCE")
           [[ $ANALYZE == true ]] && args+=(--analyze)
           read -ra targets <<< "$TARGETS"
           python3 scripts/ci.py build "${args[@]}" "${targets[@]}"
@@ -139,9 +143,12 @@ jobs:
           gh release download current --repo "$GITHUB_REPOSITORY" -p manifest.json -D state \
             || echo '{}' > state/manifest.json
       - id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/ci.py publish --results dist --manifest state/manifest.json --out out \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          { echo; python3 scripts/status.py --manifest out/manifest.json; } >> out/current.md || true
       - name: Publish releases
         env:
           GH_TOKEN: ${{ github.token }}

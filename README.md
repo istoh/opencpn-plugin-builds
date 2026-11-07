@@ -10,10 +10,11 @@ build.sh                  fetch + build everything (or the named plugins)
 fetch.sh                  run the plugins' fetch.sh scripts only
 update.sh                 git pull every checkout (fetch.sh --update)
 images.sh                 build the container environments only
+status.sh                 upstream status: releases, commits since, cadence
 targets.json              build targets: base image, platform, OpenCPN tuple
 docker/base/Dockerfile    shared image with the common build dependencies
 plugins/<name>/
-    fetch.sh              where the source comes from (URL, optional ref)
+    fetch.sh              where the source comes from (URL, ref, catalog names)
     build.sh              on the host: builds this plugin in the containers;
                           inside a container: the build recipe
     Dockerfile            optional: extra dependencies on top of the base image
@@ -140,6 +141,58 @@ To give a target its own image instead of `docker/base`, set
 `"dockerfile": "docker/<name>/Dockerfile"` in `targets.json`. The 32-bit
 ARM builds target ARMv7 and newer. Pi 1 and the original Pi Zero would need
 a separate ARMv6 environment.
+
+## Released versions
+
+`ref=@release` in `fetch.sh` (the default) builds the newest release of the
+plugin in the OpenCPN catalog. The plugin is found by the names in
+`OPENCPN_CATALOG_NAMES`. The release is matched to a Git tag such as `v1.2`,
+`1.2.0.0` or `name-1.2`, or to the commit in a version like `2.0+132.ebb1fdf`.
+Without a match, the default branch is built with a warning. A pinned tag
+that is older than the newest release also gives a warning. The warnings are
+shown in the build plan and the release notes. When an author publishes a
+new release in the catalog, the next run builds it.
+
+Each built package is compared with the official catalog package for the
+same target (or the nearest Debian/Ubuntu one):
+
+```sh
+python3 scripts/compare.py dashboardsk_pi ubuntu-24.04-x64
+```
+
+The packages are never byte-identical. The comparison reports the version,
+the plugin API, the file list and, for each shared library, its NEEDED
+libraries, the `create_pi`/`destroy_pi` entry points and the exported
+symbols (without the standard library and wxWidgets inlines).
+
+A plugin is built for a plugin API version, not an OpenCPN version. The API
+version comes from the plugin's `api-version` metadata:
+
+| Plugin API | Needs OpenCPN |
+|---|---|
+| 1.16 | 5.0 |
+| 1.17 | 5.2 |
+| 1.18 | 5.8 |
+| 1.19, 1.20 | 5.12 |
+| 1.21, 1.22 | 5.14 |
+
+## Status
+
+```sh
+./status.sh --opencpn 5.12.4
+```
+
+For each plugin, the status table shows:
+
+- the newest catalog release and the OpenCPN it needs (⚠ when newer than
+  `--opencpn`)
+- when it was released and how many commits the default branch has gained
+  since then
+- the median interval between its GitHub releases and the next open
+  milestone with a due date
+- our build, from the `current` release manifest
+
+The build plan in Actions and the `current` release show the same table.
 
 ## Analysis
 

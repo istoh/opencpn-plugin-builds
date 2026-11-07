@@ -22,10 +22,12 @@ MISSING_SOURCES = {
 COMPONENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 
 FETCH_SCRIPT = """#!/usr/bin/env bash
-# Source of the {names} plugin. Set ref to a branch, or pin a tag or commit for reproducible builds.
+# Source of the {names} plugin.
+# ref=@release builds the newest catalog release; a branch, tag or commit also works.
 set -euo pipefail
 url={url}
-ref=
+ref=@release
+export OPENCPN_CATALOG_NAMES="{catalog_names}"
 exec bash "$(dirname -- "${{BASH_SOURCE[0]}}")/../../scripts/git-fetch.sh" {directory} "$url" "$ref"
 """
 
@@ -82,8 +84,8 @@ def scaffold(directory, url, names):
     destination.mkdir(parents=True)
     for filename, template in (("fetch.sh", FETCH_SCRIPT), ("build.sh", BUILD_SCRIPT)):
         script = destination / filename
-        script.write_text(template.format(directory=directory, url=url,
-                                          names=", ".join(sorted(names))), encoding="utf-8")
+        script.write_text(template.format(directory=directory, url=url, names=", ".join(sorted(names)),
+                                          catalog_names=";".join(sorted(names))), encoding="utf-8")
         script.chmod(0o755)
     return "plugins/{} created".format(directory)
 

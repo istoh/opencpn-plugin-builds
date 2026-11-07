@@ -28,6 +28,7 @@ def load(name):
 
 
 bt = load("build-target")
+catalog = load("catalog")
 # The runner that also runs the source scans, once per plugin.
 ANALYSIS_RUNNER = "ubuntu-24.04"
 
@@ -72,8 +73,9 @@ def resolve(plugin):
                             capture_output=True, text=True, timeout=120)
     if result.returncode:
         print(f"{plugin}: cannot resolve upstream commit: {result.stderr.strip()}", file=sys.stderr)
-        return None
-    return result.stdout.strip().splitlines()[-1]
+        return None, ""
+    commit, _, source = result.stdout.strip().splitlines()[-1].partition(" ")
+    return commit, source
 
 
 def plan(args):
@@ -87,8 +89,11 @@ def plan(args):
         step_summary(f"Skipped (runner not available): {' '.join(skipped)}\n")
         targets = [target for target in targets if target not in skipped]
     plugins = [name for name in bt.plugins() if args.match.casefold() in name.casefold()]
+    catalog.load()  # download once before the parallel lookups
     with ThreadPoolExecutor(16) as pool:
-        commits = dict(zip(plugins, pool.map(resolve, plugins)))
+        resolved = dict(zip(plugins, pool.map(resolve, plugins)))
+    commits = {plugin: commit for plugin, (commit, _) in resolved.items()}
+    sources = {plugin: source for plugin, (_, source) in resolved.items()}
 
     jobs = {}
     rows = []
@@ -110,11 +115,12 @@ def plan(args):
                 wanted.append(target)
         if not wanted:
             continue
-        rows.append(f"| {plugin} | `{commit[:10]}` | {' '.join(wanted)} |")
+        rows.append(f"| {plugin} | `{commit[:10]}` {sources[plugin]} | {' '.join(wanted)} |")
         for target in wanted:
             profile = bt.TARGETS[target]
             job = jobs.setdefault((plugin, profile["runner"]), {
                 "plugin": plugin, "commit": commit, "since": since, "runner": profile["runner"],
+                "source": sources[plugin],
                 "qemu": False, "targets": [], "analyze": False,
             })
             job["targets"].append(target)
@@ -132,8 +138,9 @@ def plan(args):
         include = include[:256]
     matrix = json.dumps({"include": include}, separators=(",", ":"))
     github_output(matrix=matrix, count=len(include))
-    step_summary(f"### Build plan: {len(include)} jobs\n\n| Plugin | Commit | Targets |\n|---|---|---|\n"
-                 + "\n".join(rows))
+    warnings = sorted(f"- {plugin}: {source}" for plugin, source in sources.items() if source.startswith("WARNING"))
+    step_summary(f"### Build plan: {len(include)} jobs\n\n| Plugin | Source | Targets |\n|---|---|---|\n"
+                 + "\n".join(rows) + ("\n\n### Source warnings\n\n" + "\n".join(warnings) if warnings else ""))
     print(matrix)
     return 0
 
@@ -144,9 +151,9 @@ def package_version(tarball):
             member = next(m for m in archive.getmembers() if Path(m.name).name == "metadata.xml")
             with archive.extractfile(member) as stream:
                 metadata = ET.parse(stream).getroot()
-        return metadata.findtext("name", "").strip(), metadata.findtext("version", "").strip()
+        return tuple(metadata.findtext(key, "").strip() for key in ("name", "version", "api-version"))
     except (StopIteration, OSError, tarfile.TarError, ET.ParseError):
-        return "", ""
+        return "", "", ""
 
 
 def commit_link(url, commit):
@@ -182,7 +189,8 @@ def build(args):
     source = ROOT / "repos" / plugin
     head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True,
                           text=True).stdout.strip()
-    result = {"plugin": plugin, "commit": commit, "since": args.since, "targets": {}, "changes": []}
+    result = {"plugin": plugin, "commit": commit, "since": args.since, "source": args.source,
+              "targets": {}, "changes": []}
     result["url"] = subprocess.run(["git", "-C", str(source), "remote", "get-url", "origin"],
                                    capture_output=True, text=True).stdout.strip()
     if fetch.returncode or head != commit:
@@ -197,15 +205,21 @@ def build(args):
                                      "build", target, plugin]).returncode
             print("::endgroup::", flush=True)
             files = sorted((ROOT / "dist" / target / plugin).glob("*.tar.gz"))
-            name, version = package_version(files[0]) if files else ("", "")
+            name, version, api = package_version(files[0]) if files else ("", "", "")
             result["targets"][target] = {
                 "status": "ok" if status == 0 and files else "failed",
                 "key": bt.build_key(target, plugin, commit),
                 "files": [f"{target}/{plugin}/{file.name}" for file in files],
-                "name": name, "version": version,
+                "name": name, "version": version, "api": api,
             }
             if status:
                 print(f"::error::{plugin} failed for {target}")
+        compare = load("compare")
+        for target, entry in result["targets"].items():
+            if entry["status"] == "ok":
+                outcome = compare.run(plugin, target, ROOT / "dist" / entry["files"][0])
+                entry["compare"] = {"same": outcome["same"], "summary": outcome["summary"]}
+                print(f"{target}: {outcome['summary']}", flush=True)
         tarballs = [ROOT / "dist" / path for entry in result["targets"].values()
                     if entry["status"] == "ok" for path in entry["files"]]
         if args.analyze or tarballs:
@@ -251,7 +265,8 @@ def publish(args):
     for result in results:
         merged = by_plugin.setdefault(result["plugin"], {"targets": {}, "changes": result["changes"],
                                                           "commit": result["commit"], "analysis": {},
-                                                          "url": result.get("url", "")})
+                                                          "url": result.get("url", ""),
+                                                          "source": result.get("source", "")})
         merged["targets"].update(result["targets"])
         merged["changes"] = merged["changes"] or result["changes"]
         for key, value in (result.get("analysis") or {}).items():
@@ -271,6 +286,7 @@ def publish(args):
                 delete.update(Path(path).name for path in previous.get("files", []))
                 entries[target] = {"status": "ok", "key": outcome["key"], "commit": merged["commit"],
                                    "name": outcome["name"], "version": outcome["version"],
+                                   "api": outcome.get("api", ""), "source": merged["source"],
                                    "files": outcome["files"], "release": tag,
                                    "built": now.isoformat(timespec="seconds")}
                 upload += [str(Path(args.results) / path) for path in outcome["files"]]
@@ -294,10 +310,26 @@ def publish(args):
         bad = [target for target, outcome in sorted(merged["targets"].items()) if outcome["status"] != "ok"]
         version = next((merged["targets"][target]["version"] for target in ok), "")
         lines.append(f"### {plugin} {version}".rstrip())
+        api = next((merged["targets"][target].get("api", "") for target in ok), "")
+        needs = catalog.min_opencpn(api) if api else None
+        if api:
+            lines.append(f"Plugin API {api}: needs OpenCPN {needs or 'unknown'} or newer.")
+        if merged["source"]:
+            warning = merged["source"].startswith("WARNING")
+            lines.append(("**" if warning else "") + merged["source"] + ("**" if warning else ""))
         lines.append(f"Source {commit_link(merged['url'], merged['commit'])}. Built: {', '.join(ok) or 'none'}."
                      + (f" **Failed:** {', '.join(bad)}." if bad else ""))
         if merged["changes"]:
             lines += ["", "Upstream changes:", *[f"- {change}" for change in merged["changes"]]]
+        compared = {target: outcome["compare"] for target, outcome in merged["targets"].items()
+                    if outcome.get("compare")}
+        same = sorted(target for target, item in compared.items() if item["same"])
+        if compared:
+            lines += ["", "Compared with the official packages:"]
+            if same:
+                lines.append(f"- same: {', '.join(same)}")
+            lines += [f"- {target}: {item['summary']}" for target, item in sorted(compared.items())
+                      if not item["same"]]
         line = analysis_line(merged["analysis"])
         if line:
             lines += ["", f"Analysis: {line}"]
@@ -305,13 +337,17 @@ def publish(args):
 
     current = ["Latest successful build of every plugin and target. Older builds and release "
                "notes are in the dated `builds-*` releases.", "",
-               "| Plugin | Version | Targets | Built in |", "|---|---|---|---|"]
+               "| Plugin | Version | OpenCPN | Targets | Built in |", "|---|---|---|---|---|"]
     for plugin, entries in sorted(plugins.items()):
         ok = {target: entry for target, entry in entries.items() if entry.get("files")}
         if ok:
             versions = sorted({entry.get("version", "") for entry in ok.values()} - {""})
             releases = sorted({entry["release"] for entry in ok.values()})
-            current.append(f"| {plugin} | {' '.join(versions)} | {' '.join(sorted(ok))} | {' '.join(releases)} |")
+            apis = sorted({entry.get("api", "") for entry in ok.values()} - {""})
+            needs = sorted({catalog.min_opencpn(api) or "?" for api in apis})
+            opencpn = " ".join(f"≥ {version}" for version in needs)
+            current.append(f"| {plugin} | {' '.join(versions)} | {opencpn} | {' '.join(sorted(ok))} "
+                           f"| {' '.join(releases)} |")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -346,6 +382,7 @@ def main():
     b.add_argument("--plugin", required=True)
     b.add_argument("--commit", required=True)
     b.add_argument("--since", default="")
+    b.add_argument("--source", default="", help="where the commit comes from, for the notes")
     b.add_argument("--runner", default="local")
     b.add_argument("--analyze", action="store_true")
     b.add_argument("targets", nargs="+")
