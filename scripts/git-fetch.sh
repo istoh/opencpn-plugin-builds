@@ -5,6 +5,9 @@
 # An existing checkout is only moved when OPENCPN_FETCH_UPDATE=1 or REF changes.
 # OPENCPN_FETCH_RESOLVE=1 only prints the commit REF points to upstream.
 # OPENCPN_FETCH_COMMIT=<sha> checks out that commit instead of REF.
+# OPENCPN_SUBMODULE_URLS="name=url ..." fetches those submodules from another
+# URL, for upstream .gitmodules entries that point at a repository missing the
+# pinned commit. The pinned commits themselves are not changed.
 set -euo pipefail
 name=$1
 url=$2
@@ -32,13 +35,22 @@ if [[ ${OPENCPN_FETCH_RESOLVE:-0} == 1 ]]; then
 fi
 ref=${OPENCPN_FETCH_COMMIT:-$ref}
 
+update_submodules() {
+    git -C "$dest" submodule init
+    local override
+    for override in ${OPENCPN_SUBMODULE_URLS:-}; do
+        git -C "$dest" config "submodule.${override%%=*}.url" "${override#*=}"
+    done
+    git -C "$dest" submodule update --init --recursive
+}
+
 if [[ ! -e $dest ]]; then
     mkdir -p -- "$root/repos"
-    git clone --recurse-submodules -- "$url" "$dest"
+    git clone -- "$url" "$dest"
     if [[ -n $ref ]]; then
         git -C "$dest" checkout --quiet --detach "$ref"
-        git -C "$dest" submodule update --init --recursive
     fi
+    update_submodules
     printf '%s: cloned %s\n' "$name" "$(git -C "$dest" rev-parse --short HEAD)"
     exit 0
 fi
@@ -63,10 +75,10 @@ if [[ -n $ref ]]; then
     fi
     if [[ $current != "$wanted" ]]; then
         git -C "$dest" checkout --quiet --detach "$wanted"
-        git -C "$dest" submodule update --init --recursive
+        update_submodules
     fi
 elif [[ ${OPENCPN_FETCH_UPDATE:-0} == 1 ]]; then
     git -C "$dest" pull --ff-only --quiet
-    git -C "$dest" submodule update --init --recursive
+    update_submodules
 fi
 printf '%s: at %s\n' "$name" "$(git -C "$dest" rev-parse --short HEAD)"

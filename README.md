@@ -106,6 +106,12 @@ one name or glob per line. A line starting with `!` excludes targets:
 !android-*
 ```
 
+When an upstream `.gitmodules` points at a repository that lacks the pinned
+submodule commit, `fetch.sh` can fetch it elsewhere with
+`OPENCPN_SUBMODULE_URLS="<name>=<url>"` (see `plugins/ais-vd_pi/fetch.sh`).
+When the default branch is unreleased work, pin `ref=` to the release tag
+(see `plugins/RacingPlugin/fetch.sh`).
+
 To add extra packages, create a `plugins/<name>/Dockerfile`:
 
 ```dockerfile
