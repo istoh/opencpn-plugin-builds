@@ -237,6 +237,35 @@ The run inputs select plugins and targets: `containers` (default), `all`, or
 target names. *force* rebuilds everything selected. Build logs are kept as
 workflow artifacts for 30 days.
 
+## Satellite land overlay
+
+`tools/land-overlay.sh` creates an OpenCPN chart overlay. It shows satellite
+imagery over land and leaves water transparent, so the nautical chart shows
+at sea:
+
+```sh
+tools/land-overlay.sh --bbox 24.5,59.9,25.5,60.3 --zoom 8-14 --out helsinki.mbtiles
+```
+
+It runs in a GDAL container and makes an MBTiles file with
+`type=overlay`. OpenCPN draws such a file above the other charts:
+
+- **Imagery:** Sentinel-2 cloudless 2025 by EOX (10 m, sharp to about
+  zoom 14, CC BY-NC-SA 4.0, so non-commercial use only). `--source` takes
+  another XYZ tile URL, if its terms allow offline use.
+- **Water mask:** ESA WorldCover 2021 (10 m, CC BY 4.0). Water class 80,
+  lakes included, is transparent. `--land osm` uses the OpenStreetMap land
+  polygons instead (an 800 MB download, keeps lakes), and `--land FILE`
+  uses your own polygons.
+- **Zoom levels:** OpenCPN draws only the overlay's tiles for the current
+  zoom level, so every level in `--zoom` is generated. More than 20,000
+  tiles needs `--yes`.
+- **Cache:** Downloads are kept in `~/.cache/opencpn-plugin-builds/land-overlay`.
+
+Add the directory containing the `.mbtiles` file in **Options → Charts →
+Chart Files**. OpenCPN may hide a large MBTiles overlay at startup. Show it
+by clicking it in the chart bar at the bottom of the window.
+
 ## License
 
 The build scripts and recipes in this repository are under the MIT License

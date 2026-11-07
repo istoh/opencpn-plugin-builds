@@ -6,3 +6,5 @@ __pycache__/
 # Local IDE settings and build logs
 /.idea/
 /*.log
+# Chart overlays made by tools/land-overlay.sh
+/*.mbtiles
