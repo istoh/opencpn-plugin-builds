@@ -1,0 +1,60 @@
+name: Build OpenCPN plugins
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Plugin name filter. Leave empty to build the entire catalog.'
+        required: false
+        default: DashboardSK
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          PLUGIN_FILTER: ${{ inputs.plugin }}
+        run: |
+          args=(--matrix)
+          if [[ -n "$PLUGIN_FILTER" ]]; then
+            args+=(--match "$PLUGIN_FILTER")
+          fi
+          matrix=$(./fetch.sh "${args[@]}")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: catalog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.catalog.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch and build
+        env:
+          PLUGIN_REPO: ${{ matrix.repo }}
+          PLUGIN_SOURCE: ${{ matrix.url }}
+        run: |
+          ./fetch.sh --repo "$PLUGIN_REPO"
+          test "$(git -C "$PLUGIN_REPO" remote get-url origin)" = "$PLUGIN_SOURCE"
+          ./container-build.sh "$PLUGIN_REPO"
+      - name: Save package and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-26.04-${{ matrix.repo }}
+          path: dist/
+          if-no-files-found: ignore

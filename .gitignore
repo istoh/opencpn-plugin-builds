@@ -1,0 +1,5 @@
+# Repositories fetched by fetch.sh are separate checkouts at the root.
+/*/
+/dist/
+!/.github/
+__pycache__/
