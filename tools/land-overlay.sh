@@ -35,7 +35,7 @@ while (( $# )); do
     shift
 done
 
-exec "${docker[@]}" run --rm --user "$(id -u):$(id -g)" \
+exec "${docker[@]}" run --rm --user "$(id -u):$(id -g)" --env MML_API_KEY \
     --mount "type=bind,src=$here/land_overlay.py,dst=/land_overlay.py,readonly" \
     --mount "type=bind,src=$cache,dst=/cache" \
     --mount "type=bind,src=$out_dir,dst=/out" \

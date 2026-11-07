@@ -245,14 +245,19 @@ at sea:
 
 ```sh
 tools/land-overlay.sh --bbox 24.5,59.9,25.5,60.3 --zoom 8-14 --out helsinki.mbtiles
+MML_API_KEY=... tools/land-overlay.sh --source mml --bbox 21.9,60.1,22.4,60.4 --zoom 10-16 --out turku.mbtiles
 ```
 
 It runs in a GDAL container and makes an MBTiles file with
 `type=overlay`. OpenCPN draws such a file above the other charts:
 
 - **Imagery:** Sentinel-2 cloudless 2025 by EOX (10 m, sharp to about
-  zoom 14, CC BY-NC-SA 4.0, so non-commercial use only). `--source` takes
-  another XYZ tile URL, if its terms allow offline use.
+  zoom 14, CC BY-NC-SA 4.0, so non-commercial use only). `--source mml`
+  uses the National Land Survey of Finland orthophotos instead (about
+  0.5 m, Finland only, CC BY 4.0). They need a free API key in
+  `MML_API_KEY`, which is checked before anything is downloaded. Areas
+  without imagery are transparent. `--source` also takes another XYZ tile
+  URL, if its terms allow offline use.
 - **Water mask:** ESA WorldCover 2021 (10 m, CC BY 4.0). Water class 80,
   lakes included, is transparent. `--land osm` uses the OpenStreetMap land
   polygons instead (an 800 MB download, keeps lakes), and `--land FILE`

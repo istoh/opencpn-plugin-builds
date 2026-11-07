@@ -10,6 +10,7 @@ Runs inside the GDAL container started by tools/land-overlay.sh.
 
 import argparse
 import math
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -34,7 +35,32 @@ SOURCES = {
             "${z}/${y}/${x}.jpg",
             "Sentinel-2 cloudless - https://s2maps.eu by EOX IT Services GmbH "
             "(Contains modified Copernicus Sentinel data 2025), CC BY-NC-SA 4.0"),
+    # National Land Survey of Finland orthophotos: about 0.5 m, Finland only, CC BY 4.0.
+    # Needs a free API key in MML_API_KEY: https://www.maanmittauslaitos.fi/rajapinnat/api-avaimen-ohje
+    "mml": ("https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/ortokuva/default/"
+            "WGS84_Pseudo-Mercator/${z}/${y}/${x}.jpg?api-key={MML_API_KEY}",
+            "Orthophotos © National Land Survey of Finland (Maanmittauslaitos), CC BY 4.0"),
 }
+MML_CAPABILITIES = "https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/WMTSCapabilities.xml?api-key={key}"
+
+
+def mml_max_zoom(key):
+    """Check the key and the ortokuva layer, and return its deepest zoom level."""
+    import xml.etree.ElementTree as ET
+    try:
+        with urlopen(Request(MML_CAPABILITIES.format(key=key), headers={"User-Agent": AGENT}), timeout=60) as response:
+            root = ET.fromstring(response.read())
+    except OSError as error:
+        raise SystemExit(f"MML capabilities request failed (check MML_API_KEY): {error}")
+    ows = "{http://www.opengis.net/ows/1.1}"
+    wmts = "{http://www.opengis.net/wmts/1.0}"
+    layers = [layer for layer in root.iter(f"{wmts}Layer") if layer.findtext(f"{ows}Identifier") == "ortokuva"]
+    if not layers:
+        raise SystemExit("MML capabilities do not list the ortokuva layer.")
+    for tile_set in root.iter(f"{wmts}TileMatrixSet"):
+        if tile_set.findtext(f"{ows}Identifier") == "WGS84_Pseudo-Mercator":
+            return len(tile_set.findall(f"{wmts}TileMatrix")) - 1
+    return None
 # ESA WorldCover 10 m land cover (CC BY 4.0): class 80 is permanent water. Read
 # directly from the cloud-optimized GeoTIFFs, one per 3x3 degree cell.
 WORLDCOVER = ("/vsicurl/https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/"
@@ -128,7 +154,8 @@ def wms_xml(template, max_zoom, path):
     <YOrigin>top</YOrigin>
   </DataWindow>
   <Projection>EPSG:3857</Projection>
-  <BlockSizeX>256</BlockSizeX><BlockSizeY>256</BlockSizeY><BandsCount>3</BandsCount>
+  <BlockSizeX>256</BlockSizeX><BlockSizeY>256</BlockSizeY><BandsCount>4</BandsCount>
+  <ZeroBlockHttpCodes>204,404</ZeroBlockHttpCodes>
   <MaxConnections>4</MaxConnections>
   <UserAgent>{AGENT}</UserAgent>
   <Cache><Path>{CACHE / 'tiles'}</Path></Cache>
@@ -157,6 +184,15 @@ def main():
     if not 0 <= min_zoom <= max_zoom <= 18:
         parser.error("--zoom must be MIN-MAX between 0 and 18")
     template, attribution = SOURCES.get(args.source, (args.source, args.attribution))
+    if args.source == "mml":
+        key = os.getenv("MML_API_KEY", "")
+        if not key:
+            parser.error("--source mml needs MML_API_KEY (a free key from Maanmittauslaitos)")
+        deepest = mml_max_zoom(key)
+        print(f"MML orthophotos: zoom levels up to {deepest}", flush=True)
+        if deepest is not None and max_zoom > deepest:
+            parser.error(f"MML orthophotos go to zoom {deepest}")
+        template = template.replace("{MML_API_KEY}", key)
     if "{z}" not in template.replace("${", "{"):
         parser.error("--source must be a known name or an XYZ URL with {z}, {x} and {y}")
     if args.land == "osm":
@@ -216,12 +252,18 @@ def main():
                                creationOptions=["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
             warped = None
             # The imagery's RGB bands plus the mask as alpha.
-            bands = [(rgb, 1, "Red"), (rgb, 2, "Green"), (rgb, 3, "Blue"), (alpha, 1, "Alpha")]
-            masked.write_text(f'<VRTDataset rasterXSize="{width}" rasterYSize="{height}">{georeference(grid)}' + "".join(
-                f'<VRTRasterBand dataType="Byte" band="{index}"><ColorInterp>{color}</ColorInterp>'
-                f'<SimpleSource><SourceFilename relativeToVRT="0">{path}</SourceFilename>'
-                f'<SourceBand>{band}</SourceBand></SimpleSource></VRTRasterBand>'
-                for index, (path, band, color) in enumerate(bands, 1)) + "</VRTDataset>")
+            # The imagery's RGB, and as alpha the minimum of the land mask and the
+            # imagery's own alpha (0 where the source has no tile).
+            source_xml = lambda path, band: (f'<SimpleSource><SourceFilename relativeToVRT="0">{path}'
+                                             f'</SourceFilename><SourceBand>{band}</SourceBand></SimpleSource>')
+            masked.write_text(
+                f'<VRTDataset rasterXSize="{width}" rasterYSize="{height}">{georeference(grid)}'
+                + "".join(f'<VRTRasterBand dataType="Byte" band="{band}"><ColorInterp>{color}</ColorInterp>'
+                          f'{source_xml(rgb, band)}</VRTRasterBand>'
+                          for band, color in ((1, "Red"), (2, "Green"), (3, "Blue")))
+                + '<VRTRasterBand dataType="Byte" band="4" subClass="VRTDerivedRasterBand">'
+                  '<ColorInterp>Alpha</ColorInterp><PixelFunctionType>min</PixelFunctionType>'
+                + source_xml(rgb, 4) + source_xml(alpha, 1) + "</VRTRasterBand></VRTDataset>")
 
         print("Writing MBTiles", flush=True)
         if output.exists():
