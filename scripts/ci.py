@@ -149,6 +149,20 @@ def package_version(tarball):
         return "", ""
 
 
+def commit_link(url, commit):
+    """Markdown link to the upstream commit, so each package points at its exact source."""
+    base = url.removesuffix(".git")
+    if "gitlab.com" in base:
+        path = "/-/commit/"
+    elif "bitbucket.org" in base:
+        path = "/commits/"
+    elif base.startswith("https://"):
+        path = "/commit/"
+    else:
+        return f"`{commit[:10]}`"
+    return f"[`{commit[:10]}`]({base}{path}{commit})"
+
+
 def changes(source, since, commit):
     if not since or since == commit:
         return []
@@ -169,6 +183,8 @@ def build(args):
     head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True,
                           text=True).stdout.strip()
     result = {"plugin": plugin, "commit": commit, "since": args.since, "targets": {}, "changes": []}
+    result["url"] = subprocess.run(["git", "-C", str(source), "remote", "get-url", "origin"],
+                                   capture_output=True, text=True).stdout.strip()
     if fetch.returncode or head != commit:
         for target in args.targets:
             result["targets"][target] = {"status": "failed", "error": "fetch failed",
@@ -234,7 +250,8 @@ def publish(args):
     by_plugin = {}
     for result in results:
         merged = by_plugin.setdefault(result["plugin"], {"targets": {}, "changes": result["changes"],
-                                                          "commit": result["commit"], "analysis": {}})
+                                                          "commit": result["commit"], "analysis": {},
+                                                          "url": result.get("url", "")})
         merged["targets"].update(result["targets"])
         merged["changes"] = merged["changes"] or result["changes"]
         for key, value in (result.get("analysis") or {}).items():
@@ -277,7 +294,7 @@ def publish(args):
         bad = [target for target, outcome in sorted(merged["targets"].items()) if outcome["status"] != "ok"]
         version = next((merged["targets"][target]["version"] for target in ok), "")
         lines.append(f"### {plugin} {version}".rstrip())
-        lines.append(f"Source `{merged['commit'][:10]}`. Built: {', '.join(ok) or 'none'}."
+        lines.append(f"Source {commit_link(merged['url'], merged['commit'])}. Built: {', '.join(ok) or 'none'}."
                      + (f" **Failed:** {', '.join(bad)}." if bad else ""))
         if merged["changes"]:
             lines += ["", "Upstream changes:", *[f"- {change}" for change in merged["changes"]]]
