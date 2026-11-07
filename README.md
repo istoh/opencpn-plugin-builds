@@ -108,7 +108,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends libfoo-dev \
 | --- | --- |
 | `ubuntu-26.04-x64`, `ubuntu-24.04-x64`, `debian-13-x64` | container |
 | `rpi-trixie-arm64/armhf`, `rpi-bookworm-arm64/armhf` | container, ARM (QEMU on x86-64) |
+| `android-arm64`, `android-armhf` | container, cross-compiled with the Android NDK |
 | `windows-x64`, `macos-arm64`, `macos-x64` | natively on a matching host or GitHub runner |
+
+Android builds use `docker/android`. The NDK version and its SHA-1 are
+`build_args` of the target in `targets.json` (now r30, the latest stable
+release). To support an older NDK, add another target with different
+`build_args`. The recipe uses the plugin's own
+`cmake/android-*-toolchain.cmake`.
 
 To give a target its own image instead of `docker/base`, set
 `"dockerfile": "docker/<name>/Dockerfile"` in `targets.json`. The 32-bit

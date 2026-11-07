@@ -134,6 +134,7 @@ def build_key(target, plugin, commit):
     if "base" in profile:
         dockerfile = ROOT / profile.get("dockerfile", "docker/base/Dockerfile")
         digest.update(environment_hash(profile["base"], profile["platform"],
+                                       *image_args(profile.get("build_args")),
                                        context=dockerfile.parent).encode())
     inputs = [ROOT / "plugins" / plugin, SCRIPTS / "package-build.sh", SCRIPTS / "cmake-plugin.sh",
               SCRIPTS / "plugin-entry.sh"]
@@ -144,16 +145,23 @@ def build_key(target, plugin, commit):
     return digest.hexdigest()[:16]
 
 
-def ensure_image(name, dockerfile, base, platform, log, rebuild=False):
+def image_args(build_args):
+    """Extra docker build arguments of a target, e.g. the Android NDK version."""
+    return [f"{key}={value}" for key, value in sorted((build_args or {}).items())]
+
+
+def ensure_image(name, dockerfile, base, platform, log, rebuild=False, build_args=None):
     """Build an environment image unless one with the same inputs already exists."""
-    tag = f"{name}:{environment_hash(base, platform, context=dockerfile.parent)}"
+    extra = image_args(build_args)
+    tag = f"{name}:{environment_hash(base, platform, *extra, context=dockerfile.parent)}"
     exists = subprocess.run([*DOCKER, "image", "inspect", tag], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL).returncode == 0
     if exists and not rebuild:
         print(f"Environment {tag} is up to date", flush=True)
         return 0, tag
     print(f"Building environment {tag}", flush=True)
-    status = run_logged([*DOCKER, "build", "--platform", platform, "--build-arg", f"BASE_IMAGE={base}",
+    arguments = [value for arg in [f"BASE_IMAGE={base}", *extra] for value in ("--build-arg", arg)]
+    status = run_logged([*DOCKER, "build", "--platform", platform, *arguments,
                          "--label", "opencpn-plugin-builds=1", "-f", str(dockerfile), "-t", tag,
                          str(dockerfile.parent)], log)
     return status, tag
@@ -167,7 +175,8 @@ def environment(target, plugin=None, log_dir=None, rebuild=False):
         log_dir.mkdir(parents=True, exist_ok=True)
     dockerfile = ROOT / profile.get("dockerfile", "docker/base/Dockerfile")
     status, image = ensure_image(f"opencpn-env-{target}", dockerfile, profile["base"],
-                                 profile["platform"], log_dir / "image.log", rebuild)
+                                 profile["platform"], log_dir / "image.log", rebuild,
+                                 profile.get("build_args"))
     plugin_dockerfile = ROOT / "plugins" / plugin / "Dockerfile" if plugin else None
     if status or not plugin_dockerfile or not plugin_dockerfile.is_file():
         return status, image

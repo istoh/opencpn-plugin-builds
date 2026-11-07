@@ -10,9 +10,26 @@ args=(-DCMAKE_BUILD_TYPE=Release)
 if [[ -n ${OPENCPN_TARGET_TUPLE:-} ]]; then
     args+=("-DOCPN_TARGET_TUPLE=$OPENCPN_TARGET_TUPLE")
 fi
-# Debian's compiler, unlike Ubuntu's, does not harden by default. Use the same
-# flags everywhere on Linux. CMake reads these on the first configure.
-if [[ $(uname -s) == Linux ]]; then
+if [[ ${OPENCPN_TARGET:-} == android-* ]]; then
+    # Cross-compile with the plugin's own toolchain file. Templates name the
+    # arm64 one either android-aarch64 or android-arm64.
+    arch=${OPENCPN_TARGET#android-}
+    toolchain=
+    for candidate in "cmake/android-${arch/arm64/aarch64}-toolchain.cmake" "cmake/android-$arch-toolchain.cmake"; do
+        if [[ -f $candidate ]]; then
+            toolchain=$PWD/$candidate
+            break
+        fi
+    done
+    if [[ -z $toolchain ]]; then
+        printf 'No cmake/android-*-toolchain.cmake: this plugin has no Android build.\n' >&2
+        exit 1
+    fi
+    export OCPN_TARGET=$OPENCPN_TARGET
+    args+=("-DCMAKE_TOOLCHAIN_FILE=$toolchain")
+# The NDK hardens by default. Debian's compiler, unlike Ubuntu's, does not.
+# Use the same flags on all Linux builds. CMake reads these on the first configure.
+elif [[ $(uname -s) == Linux ]]; then
     hardening="-fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
     export CFLAGS="$hardening ${CFLAGS:-}" CXXFLAGS="$hardening ${CXXFLAGS:-}"
     export LDFLAGS="-Wl,-z,relro,-z,now ${LDFLAGS:-}"

@@ -6,6 +6,8 @@
   "rpi-trixie-armhf": {"runner": "ubuntu-24.04", "base": "debian:13", "platform": "linux/arm/v7", "qemu": true, "tuple": "debian-armhf;13;armhf"},
   "rpi-bookworm-arm64": {"runner": "ubuntu-24.04-arm", "base": "debian:12", "platform": "linux/arm64", "tuple": "debian-arm64;12;arm64"},
   "rpi-bookworm-armhf": {"runner": "ubuntu-24.04", "base": "debian:12", "platform": "linux/arm/v7", "qemu": true, "tuple": "debian-armhf;12;armhf"},
+  "android-arm64": {"runner": "ubuntu-24.04", "base": "ubuntu:24.04", "platform": "linux/amd64", "dockerfile": "docker/android/Dockerfile", "build_args": {"NDK_VERSION": "r30", "NDK_SHA1": "5107f898313790e449e87eee2183d9a20602dee9"}, "tuple": "android-arm64;16;arm64"},
+  "android-armhf": {"runner": "ubuntu-24.04", "base": "ubuntu:24.04", "platform": "linux/amd64", "dockerfile": "docker/android/Dockerfile", "build_args": {"NDK_VERSION": "r30", "NDK_SHA1": "5107f898313790e449e87eee2183d9a20602dee9"}, "tuple": "android-armhf;16;armhf"},
   "windows-x64": {"runner": "windows-2025", "os": "win32", "arch": "amd64"},
   "macos-arm64": {"runner": "macos-15", "os": "darwin", "arch": "arm64"},
   "macos-x64": {"runner": "macos-15-intel", "os": "darwin", "arch": "x86_64"}
