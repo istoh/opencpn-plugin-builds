@@ -223,12 +223,12 @@ def analysis_line(summary):
     parts = []
     cpp = summary.get("cppcheck", {})
     if cpp:
-        parts.append("cppcheck " + (cpp["error"] if "error" in cpp else
-                     ", ".join(f"{count} {kind}" for kind, count in sorted(cpp.items())) or "clean"))
+        parts.append("cppcheck " + (cpp["failed"] if "failed" in cpp else
+                     ", ".join(f"{count} {kind.replace('_', ' ')}" for kind, count in sorted(cpp.items())) or "clean"))
     for scanner in ("osv", "trivy"):
         found = summary.get(scanner, {})
         if found:
-            parts.append(f"{scanner} " + (found["error"] if "error" in found else
+            parts.append(f"{scanner} " + (found["failed"] if "failed" in found else
                          ", ".join(f"{count} {kind}" for kind, count in found.items() if kind != "packages")))
     weak = sorted({item["library"].rsplit("/", 1)[-1] for item in summary.get("hardening", [])
                    if item["relro"] == "none" or not item["nx"] or not item["stack_protector"]})

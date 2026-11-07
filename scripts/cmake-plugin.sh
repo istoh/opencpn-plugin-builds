@@ -10,6 +10,13 @@ args=(-DCMAKE_BUILD_TYPE=Release)
 if [[ -n ${OPENCPN_TARGET_TUPLE:-} ]]; then
     args+=("-DOCPN_TARGET_TUPLE=$OPENCPN_TARGET_TUPLE")
 fi
+# Debian's compiler, unlike Ubuntu's, does not harden by default. Use the same
+# flags everywhere on Linux. CMake reads these on the first configure.
+if [[ $(uname -s) == Linux ]]; then
+    hardening="-fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
+    export CFLAGS="$hardening ${CFLAGS:-}" CXXFLAGS="$hardening ${CXXFLAGS:-}"
+    export LDFLAGS="-Wl,-z,relro,-z,now ${LDFLAGS:-}"
+fi
 build_dir=${OPENCPN_BUILD_DIR:-build}
 cmake -S . -B "$build_dir" "${args[@]}" "$@"
 cmake --build "$build_dir" --config Release --parallel "${OPENCPN_BUILD_JOBS:-2}"

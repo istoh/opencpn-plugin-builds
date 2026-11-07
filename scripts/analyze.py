@@ -62,7 +62,7 @@ def cppcheck(source, output):
     status, image = bt.ensure_image("opencpn-analysis", ANALYSIS_DOCKERFILE, ANALYSIS_BASE,
                                     host_docker_platform(), output / "image.log")
     if status:
-        return {"error": "analysis image build failed"}
+        return {"failed": "analysis image build failed"}
     report = output / "cppcheck.xml"
     command = container(image, source, output, "cppcheck", "--enable=warning,performance,portability",
                         "--inline-suppr", "--suppress=missingIncludeSystem", "--xml", "--quiet",
@@ -71,7 +71,7 @@ def cppcheck(source, output):
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=(output / "cppcheck.log").open("wb"),
                    timeout=TIMEOUT)
     if not report.is_file():
-        return {"error": "cppcheck produced no report"}
+        return {"failed": "cppcheck produced no report"}
     vendored = tuple(f"/src/{path}/" for path in submodule_paths(source))
     counts = Counter()
     for error in ET.parse(report).getroot().iter("error"):
@@ -91,7 +91,7 @@ def osv(source, output):
     if status == 128:
         return {"vulnerabilities": 0, "packages": 0}
     if status not in (0, 1):
-        return {"error": f"osv-scanner exit status {status}"}
+        return {"failed": f"osv-scanner exit status {status}"}
     results = json.loads(report.read_text() or "{}").get("results") or []
     packages = [package for result in results for package in result.get("packages") or []]
     return {"vulnerabilities": sum(len(package.get("vulnerabilities") or []) for package in packages),
@@ -104,7 +104,7 @@ def trivy(source, output):
                                    "vuln,secret", "--cache-dir", "/tmp/trivy", "--format", "json",
                                    "/src"), report)
     if status:
-        return {"error": f"trivy exit status {status}"}
+        return {"failed": f"trivy exit status {status}"}
     results = json.loads(report.read_text() or "{}").get("Results") or []
     return {"vulnerabilities": sum(len(result.get("Vulnerabilities") or []) for result in results),
             "secrets": sum(len(result.get("Secrets") or []) for result in results)}
@@ -144,7 +144,9 @@ def analyze(plugin, tarballs=(), source_scans=True):
     source = bt.ROOT / "repos" / plugin
     output = bt.ROOT / "dist" / "analysis" / plugin
     output.mkdir(parents=True, exist_ok=True)
-    summary_path = output / "summary.json"
+    # Jobs without source scans only add hardening results; keep them apart so merged
+    # CI artifacts do not overwrite the full summary.
+    summary_path = output / ("summary.json" if source_scans else f"hardening-{host_platform.machine()}.json")
     summary = json.loads(summary_path.read_text()) if summary_path.is_file() else {}
     if source_scans:
         summary["commit"] = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"],
@@ -154,7 +156,7 @@ def analyze(plugin, tarballs=(), source_scans=True):
             try:
                 summary[name] = scan(source, output)
             except (OSError, ValueError, subprocess.SubprocessError) as error:
-                summary[name] = {"error": str(error)}
+                summary[name] = {"failed": str(error)}
     if tarballs:
         known = {item["library"] + "@" + item["tarball"]: item for item in summary.get("hardening", [])}
         for item in hardening(tarballs):
