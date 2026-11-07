@@ -157,3 +157,10 @@ informational and never fail a build.
 The run inputs select plugins and targets: `containers` (default), `all`, or
 target names. *force* rebuilds everything selected. Build logs are kept as
 workflow artifacts for 30 days.
+
+## License
+
+The build scripts and recipes in this repository are under the MIT License
+(see `LICENSE`). The plugins and their packages keep their upstream licenses,
+mostly GPL. Each source is listed in the plugin's `fetch.sh`, and its exact
+commit is recorded with each build.
